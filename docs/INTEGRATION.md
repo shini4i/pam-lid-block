@@ -30,38 +30,76 @@ See [PAM-CONTROL-FLAGS.md](PAM-CONTROL-FLAGS.md) for detailed explanation.
 
 ## NixOS
 
-The `check-lid` package is available via [shini4i/nixpkgs](https://github.com/shini4i/nixpkgs).
+The `pam-lid-block` package is available via [shini4i/nixpkgs](https://github.com/shini4i/nixpkgs).
 
-### Using flake input
+### 1. Add flake input
 
 ```nix
 # flake.nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    shini4i-nixpkgs.url = "github:shini4i/nixpkgs";
+inputs.shini4i-pkgs.url = "github:shini4i/nixpkgs";
+```
+
+### 2. Add to overlay
+
+```nix
+# flake.nix (in outputs)
+overlays.default = final: prev: {
+  inherit (inputs.shini4i-pkgs.packages.${prev.stdenv.hostPlatform.system}) pam-lid-block;
+};
+```
+
+### 3. Configure PAM
+
+```nix
+# configuration.nix
+{ config, pkgs, lib, ... }:
+
+let
+  lidCheckBinary = "${pkgs.pam-lid-block}/bin/check-lid";
+
+  # Helper to create lid check rule with proper ordering relative to fprintd
+  mkLidCheckRule = service: {
+    order = config.security.pam.services.${service}.rules.auth.fprintd.order - 10;
+    control = "[success=1 default=ignore]";
+    modulePath = "${pkgs.pam}/lib/security/pam_exec.so";
+    args = ["quiet" lidCheckBinary];
   };
+in
+{
+  services.fprintd.enable = true;
 
-  outputs = { self, nixpkgs, shini4i-nixpkgs, ... }: {
-    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      modules = [
-        ({ pkgs, lib, ... }:
-        let
-          check-lid = shini4i-nixpkgs.packages.${pkgs.system}.check-lid;
-        in
-        {
-          # For sudo
-          security.pam.services.sudo.text = lib.mkBefore ''
-            auth [success=1 default=ignore] pam_exec.so quiet ${check-lid}/bin/check-lid
-          '';
+  security.pam.services = {
+    sudo = {
+      fprintAuth = true;
+      rules.auth.lid-check = mkLidCheckRule "sudo";
+    };
 
-          # For polkit
-          security.pam.services.polkit-1.text = lib.mkBefore ''
-            auth [success=1 default=ignore] pam_exec.so quiet ${check-lid}/bin/check-lid
-          '';
-        })
-      ];
+    polkit-1 = {
+      fprintAuth = true;
+      rules.auth.lid-check = mkLidCheckRule "polkit-1";
+    };
+
+    # GDM fingerprint requires [success=die] instead of [success=1] because
+    # it's fingerprint-only (no pam_unix.so fallback). When lid is closed,
+    # authentication must fail entirely so GDM falls back to gdm-password.
+    gdm-fingerprint = lib.mkIf config.services.fprintd.enable {
+      text = lib.mkForce ''
+        auth      required                     pam_shells.so
+        auth      requisite                    pam_nologin.so
+        auth      requisite                    pam_faillock.so preauth
+        auth      [success=die default=ignore] ${pkgs.pam}/lib/security/pam_exec.so quiet ${lidCheckBinary}
+        auth      required                     ${pkgs.fprintd}/lib/security/pam_fprintd.so
+        auth      required                     pam_env.so conffile=/etc/pam/environment readenv=0
+        auth      [success=ok default=1]       ${pkgs.gdm}/lib/security/pam_gdm.so
+        auth      optional                     ${pkgs.gnome-keyring}/lib/security/pam_gnome_keyring.so
+
+        account   include                      login
+
+        password  required                     pam_deny.so
+
+        session   include                      login
+        session   optional                     ${pkgs.gnome-keyring}/lib/security/pam_gnome_keyring.so auto_start
+      '';
     };
   };
 }
