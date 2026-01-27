@@ -1,0 +1,74 @@
+name: Quality Assurance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0  # For git describe version
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@4e002c8ec80594ecd40e759629461e26c8abed15 # v31.9.0
+
+      - name: Check code formatting
+        run: nix develop --command task format:check
+
+      - name: Run static analysis (cppcheck)
+        run: nix develop --command task lint
+
+      - name: Run clang-tidy
+        run: nix develop --command task lint:clang-tidy
+        continue-on-error: true  # Advisory, not blocking
+
+      - name: Build
+        run: nix develop --command task build
+
+      - name: Run tests
+        run: nix develop --command task test
+
+      - name: Test --help flag
+        run: ./build/check-lid --help
+
+      - name: Test --version flag
+        run: ./build/check-lid --version
+
+      - name: Test exit codes
+        run: |
+          # Test should return 0 (lid closed) or 1 (lid open/no lid)
+          # In CI environment (no physical lid), expect 1
+          exit_code=0
+          ./build/check-lid || exit_code=$?
+          echo "Exit code: $exit_code"
+          if [ $exit_code -ne 0 ] && [ $exit_code -ne 1 ]; then
+            echo "Unexpected exit code: $exit_code"
+            exit 1
+          fi
+
+  sanitizer-test:
+    name: Sanitizer Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@4e002c8ec80594ecd40e759629461e26c8abed15 # v31.9.0
+
+      - name: Build and run with sanitizers
+        run: nix develop --command task test:sanitizer
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:abort_on_error=1

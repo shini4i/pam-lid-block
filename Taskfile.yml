@@ -1,0 +1,176 @@
+version: '3'
+
+vars:
+  BINARY: check-lid
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  BUILD_DIR: build
+  SRC_DIR: src
+  TEST_DIR: tests
+  PREFIX: /usr/local
+  BINDIR: '{{.PREFIX}}/bin'
+  MANDIR: '{{.PREFIX}}/share/man/man1'
+
+  # Compiler settings
+  CC: gcc
+  PKG_CONFIG: pkg-config
+
+  # Base compiler flags (shared across all builds)
+  BASE_CFLAGS: -Wall -Wextra -Werror -Wpedantic -Wformat=2 -Wformat-security -DVERSION=\"{{.VERSION}}\"
+
+  # Security-hardened build flags (release)
+  CFLAGS: -O2 {{.BASE_CFLAGS}} -fstack-protector-strong -fPIE -D_FORTIFY_SOURCE=2
+  LDFLAGS: -Wl,-z,relro,-z,now -pie
+
+  # Debug build flags (no optimization, no FORTIFY_SOURCE)
+  DEBUG_CFLAGS: -g -O1 {{.BASE_CFLAGS}} -DDEBUG
+  DEBUG_LDFLAGS: ''
+
+  # Test build flags (enable test mode for error injection)
+  TEST_CFLAGS: -g -O1 {{.BASE_CFLAGS}} -DDEBUG -DENABLE_TEST_MODE
+  TEST_LDFLAGS: ''
+
+  # Sanitizer build flags (for testing)
+  SANITIZER_CFLAGS: -g -O1 {{.BASE_CFLAGS}} -fsanitize=address,undefined -fno-omit-frame-pointer -DENABLE_TEST_MODE
+  SANITIZER_LDFLAGS: -fsanitize=address,undefined
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build the check-lid binary (release)
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - '{{.CC}} {{.CFLAGS}} $({{.PKG_CONFIG}} --cflags libsystemd) -o {{.BUILD_DIR}}/{{.BINARY}} {{.SRC_DIR}}/check-lid.c {{.LDFLAGS}} $({{.PKG_CONFIG}} --libs libsystemd)'
+    sources:
+      - '{{.SRC_DIR}}/*.c'
+    generates:
+      - '{{.BUILD_DIR}}/{{.BINARY}}'
+
+  build:debug:
+    desc: Build with debug symbols (no optimization)
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - '{{.CC}} {{.DEBUG_CFLAGS}} $({{.PKG_CONFIG}} --cflags libsystemd) -o {{.BUILD_DIR}}/{{.BINARY}}-debug {{.SRC_DIR}}/check-lid.c {{.DEBUG_LDFLAGS}} $({{.PKG_CONFIG}} --libs libsystemd)'
+    sources:
+      - '{{.SRC_DIR}}/*.c'
+    generates:
+      - '{{.BUILD_DIR}}/{{.BINARY}}-debug'
+
+  build:sanitizer:
+    desc: Build with AddressSanitizer and UndefinedBehaviorSanitizer
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - 'clang {{.SANITIZER_CFLAGS}} $({{.PKG_CONFIG}} --cflags libsystemd) -o {{.BUILD_DIR}}/{{.BINARY}}-asan {{.SRC_DIR}}/check-lid.c {{.SANITIZER_LDFLAGS}} $({{.PKG_CONFIG}} --libs libsystemd)'
+    sources:
+      - '{{.SRC_DIR}}/*.c'
+    generates:
+      - '{{.BUILD_DIR}}/{{.BINARY}}-asan'
+
+  build:test:
+    desc: Build the test binary and test-enabled check-lid
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      # Build test-enabled version of check-lid for tests to exec
+      - '{{.CC}} {{.TEST_CFLAGS}} $({{.PKG_CONFIG}} --cflags libsystemd) -o {{.BUILD_DIR}}/{{.BINARY}} {{.SRC_DIR}}/check-lid.c {{.TEST_LDFLAGS}} $({{.PKG_CONFIG}} --libs libsystemd)'
+      # Build the test runner
+      - '{{.CC}} {{.TEST_CFLAGS}} $({{.PKG_CONFIG}} --cflags libsystemd) -o {{.BUILD_DIR}}/test_check_lid {{.TEST_DIR}}/test_check_lid.c {{.TEST_LDFLAGS}} $({{.PKG_CONFIG}} --libs libsystemd)'
+    sources:
+      - '{{.SRC_DIR}}/*.c'
+      - '{{.TEST_DIR}}/*.c'
+    generates:
+      - '{{.BUILD_DIR}}/test_check_lid'
+
+  test:
+    desc: Run unit tests
+    deps: [build:test]
+    cmds:
+      - ./{{.BUILD_DIR}}/test_check_lid
+
+  test:sanitizer:
+    desc: Run tests with sanitizers enabled
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      # Build test-enabled version of check-lid with sanitizers
+      - 'clang {{.SANITIZER_CFLAGS}} $({{.PKG_CONFIG}} --cflags libsystemd) -o {{.BUILD_DIR}}/{{.BINARY}} {{.SRC_DIR}}/check-lid.c {{.SANITIZER_LDFLAGS}} $({{.PKG_CONFIG}} --libs libsystemd)'
+      # Build the test runner with sanitizers
+      - 'clang {{.SANITIZER_CFLAGS}} $({{.PKG_CONFIG}} --cflags libsystemd) -o {{.BUILD_DIR}}/test_check_lid-asan {{.TEST_DIR}}/test_check_lid.c {{.SANITIZER_LDFLAGS}} $({{.PKG_CONFIG}} --libs libsystemd)'
+      - ./{{.BUILD_DIR}}/test_check_lid-asan
+
+  run:
+    desc: Build and run the binary
+    deps: [build]
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY}}
+    ignore_error: true
+
+  run:verbose:
+    desc: Build and run with verbose output
+    deps: [build]
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY}} --verbose
+    ignore_error: true
+
+  run:debug:
+    desc: Run debug build with verbose output
+    deps: [build:debug]
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY}}-debug --verbose
+    ignore_error: true
+
+  lint:
+    desc: Run static analysis (cppcheck)
+    cmds:
+      - cppcheck --enable=all --error-exitcode=1 --suppress=missingIncludeSystem --suppress=normalCheckLevelMaxBranches --suppress=checkersReport --inline-suppr {{.SRC_DIR}}/
+
+  lint:clang-tidy:
+    desc: Run clang-tidy static analysis
+    cmds:
+      - clang-tidy {{.SRC_DIR}}/check-lid.c -- $({{.PKG_CONFIG}} --cflags libsystemd) -DVERSION=\"{{.VERSION}}\"
+
+  format:
+    desc: Format code with clang-format
+    cmds:
+      - clang-format -i {{.SRC_DIR}}/*.c
+      - clang-format -i {{.TEST_DIR}}/*.c 2>/dev/null || true
+
+  format:check:
+    desc: Check code formatting (fails if changes needed)
+    cmds:
+      - clang-format --dry-run --Werror {{.SRC_DIR}}/*.c
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+
+  install:
+    desc: Install the binary and man page to system
+    deps: [build]
+    cmds:
+      - install -Dm755 {{.BUILD_DIR}}/{{.BINARY}} {{.DESTDIR}}{{.BINDIR}}/{{.BINARY}}
+      - install -Dm644 docs/check-lid.1 {{.DESTDIR}}{{.MANDIR}}/{{.BINARY}}.1
+
+  uninstall:
+    desc: Remove the binary and man page from system
+    cmds:
+      - rm -f {{.DESTDIR}}{{.BINDIR}}/{{.BINARY}}
+      - rm -f {{.DESTDIR}}{{.MANDIR}}/{{.BINARY}}.1
+
+  version:
+    desc: Show version information
+    cmds:
+      - echo "Version {{.VERSION}}"
+    silent: true
+
+  ci:
+    desc: Run all CI checks (format, lint, build, test)
+    cmds:
+      - task: format:check
+      - task: lint
+      - task: build
+      - task: test

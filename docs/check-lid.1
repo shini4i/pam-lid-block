@@ -1,0 +1,109 @@
+.\" Man page for check-lid
+.\" SPDX-License-Identifier: GPL-3.0-only
+.\"
+.TH CHECK-LID 1 "January 2026" "check-lid" "User Commands"
+.SH NAME
+check-lid \- query laptop lid state for PAM authentication
+.SH SYNOPSIS
+.B check-lid
+[\fB\-v\fR|\fB\-\-verbose\fR]
+[\fB\-V\fR|\fB\-\-version\fR]
+[\fB\-h\fR|\fB\-\-help\fR]
+.SH DESCRIPTION
+.B check-lid
+is a PAM helper utility that queries the laptop lid state via the systemd-logind
+D-Bus API. It is designed to be used with PAM rules to skip fingerprint
+authentication when the laptop lid is closed (clamshell mode with external monitors).
+.PP
+The utility connects to the system D-Bus and queries the \fBLidClosed\fR property
+from \fBorg.freedesktop.login1.Manager\fR. A timeout is enforced to prevent
+blocking PAM authentication indefinitely.
+.SH OPTIONS
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose output. Logs messages to both stderr and syslog.
+.TP
+.BR \-V ", " \-\-version
+Display version information and exit.
+.TP
+.BR \-h ", " \-\-help
+Display help message and exit.
+.SH EXIT STATUS
+Exit codes are designed for PAM compatibility:
+.TP
+.B 0
+Lid is \fBCLOSED\fR. PAM interprets this as success, which can be used to skip
+subsequent authentication modules (e.g., fingerprint).
+.TP
+.B 1
+Lid is \fBOPEN\fR or an error occurred. PAM interprets this as failure/ignore,
+allowing authentication to proceed normally.
+.SH PAM INTEGRATION
+Add the following to your PAM configuration (e.g., \fI/etc/pam.d/sudo\fR):
+.PP
+.RS
+.nf
+auth    [success=1 default=ignore]    pam_exec.so quiet /usr/local/bin/check-lid
+auth    sufficient                     pam_fprintd.so
+auth    required                       pam_unix.so
+.fi
+.RE
+.PP
+When the lid is closed, \fBcheck-lid\fR returns 0 (success), causing PAM to skip
+the next module (fingerprint). When open, it returns 1, and fingerprint
+authentication proceeds normally.
+.SH LOGGING
+.B check-lid
+logs to syslog using the \fBLOG_AUTH\fR facility with program identifier
+"check-lid". Use \fBjournalctl\fR to view logs:
+.PP
+.RS
+journalctl -t check-lid --since "10 minutes ago"
+.RE
+.SH DEPENDENCIES
+.B check-lid
+requires:
+.IP \(bu 2
+systemd (for sd-bus D-Bus API)
+.IP \(bu 2
+systemd-logind service running
+.SH SECURITY
+.IP \(bu 2
+Runs as the calling user (no privilege escalation)
+.IP \(bu 2
+Only reads lid state via D-Bus (no system modifications)
+.IP \(bu 2
+Built with security-hardened compiler flags (stack protector, PIE, RELRO, FORTIFY_SOURCE)
+.IP \(bu 2
+Fail-safe design: errors return exit code 1 (proceed with normal authentication)
+.IP \(bu 2
+D-Bus calls have a 5-second timeout to prevent blocking
+.SH FILES
+.TP
+.I /etc/pam.d/*
+PAM service configuration files where check-lid can be integrated.
+.SH EXAMPLES
+Test manually:
+.PP
+.RS
+.nf
+check-lid && echo "Lid closed" || echo "Lid open"
+check-lid --verbose
+.fi
+.RE
+.SH SEE ALSO
+.BR pam (7),
+.BR pam.d (5),
+.BR pam_exec (8),
+.BR pam_fprintd (8),
+.BR systemd-logind (8)
+.SH BUGS
+Report bugs at: https://github.com/shini4i/pam-lid-block/issues
+.SH AUTHOR
+Written by shini4i.
+.SH COPYRIGHT
+Copyright \(co 2026 shini4i.
+License GPLv3: GNU GPL version 3 <https://gnu.org/licenses/gpl.html>.
+.PP
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
