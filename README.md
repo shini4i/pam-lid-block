@@ -2,8 +2,8 @@
 
 <p align="center">
   <img src="https://github.com/shini4i/pam-lid-block/actions/workflows/qa.yml/badge.svg" alt="QA">
+  <img src="https://img.shields.io/github/v/release/shini4i/pam-lid-block" alt="Release">
   <img src="https://img.shields.io/github/license/shini4i/pam-lid-block" alt="GitHub license">
-  <img src="https://img.shields.io/badge/platform-linux-blue" alt="Platform">
 </p>
 
 <p align="center">
