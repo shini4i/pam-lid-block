@@ -107,7 +107,22 @@ in
 
 ## Arch Linux
 
-### Installation
+### AUR package (community maintained)
+
+An [AUR package](https://aur.archlinux.org/packages/pam-lid-block) is available
+and can be installed with your preferred AUR helper:
+
+```bash
+paru -S pam-lid-block
+# or
+yay -S pam-lid-block
+```
+
+> **Note:** The AUR package is maintained by a community contributor, not by
+> this project. Report packaging issues to the AUR package maintainer, not to
+> this repository's issue tracker.
+
+### Installation from source
 
 ```bash
 # Install dependencies
